@@ -49,6 +49,7 @@ static NSString *kDeepLTranslateURL = @"https://www.deepl.com/translator";
 }
 
 - (EZDeepLTranslationAPI)apiType {
+    return EZDeepLTranslationAPIOnlyOfficical;
     EZDeepLTranslationAPI type = [[NSUserDefaults mm_readString:EZDeepLTranslationAPIKey defaultValue:@"0"] integerValue];
     return type;
 }
@@ -149,6 +150,9 @@ static NSString *kDeepLTranslateURL = @"https://www.deepl.com/translator";
         completion(result, error);
     };
         
+    [self localDeepLTranslate:text from:from to:to completion:callback];
+    
+    return;
     if (self.apiType == EZDeepLTranslationAPIWebFirst) {
         [self deepLWebTranslate:text from:from to:to completion:callback];
     } else {
@@ -322,6 +326,68 @@ static NSString *kDeepLTranslateURL = @"https://www.deepl.com/translator";
 
 #pragma mark - DeepL Official Translate API
 
+/// 调用本地 DeepL API
+- (void)localDeepLTranslate:(NSString *)text from:(EZLanguage)from to:(EZLanguage)to completion:(void (^)(EZQueryResult *_Nullable, NSError *_Nullable))completion{
+    
+    NSString *souceLangCode = [self languageCodeForLanguage:from];
+    NSString *targetLangCode = [self languageCodeForLanguage:to];
+        
+    NSString *urlString = @"http://192.168.2.156:9528/translate";
+    
+    NSDictionary *params = @{
+        @"text" : text,
+        @"source_lang" : souceLangCode,
+        @"target_lang" : targetLangCode
+    };
+    NSString *parameters = [params mj_JSONString] ;
+
+    AFHTTPSessionManager *manager = [AFHTTPSessionManager manager];
+    manager.session.configuration.timeoutIntervalForRequest = EZNetWorkTimeoutInterval;
+
+    CFAbsoluteTime startTime = CFAbsoluteTimeGetCurrent();
+    
+    NSURL *url = [NSURL URLWithString:urlString];
+
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    
+    [request addValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+    [request setHTTPMethod:@"POST"];
+
+    [request setHTTPBody:[parameters dataUsingEncoding:NSUTF8StringEncoding]];
+
+    NSURLSessionTask *task = [[NSURLSession sharedSession]dataTaskWithRequest:request completionHandler:^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error) {
+        
+        if(error){
+            if (error.code == NSURLErrorCancelled) {
+                return;
+            }
+            NSLog(@"deepLTranslate error: %@", error);
+            completion(self.result, error);
+            return;
+        }
+        CFAbsoluteTime endTime = CFAbsoluteTimeGetCurrent();
+
+        NSLog(@"deepLTranslate cost: %.1f ms", (endTime - startTime) * 1000);
+        
+        NSDictionary *dict = [NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingMutableLeaves error:nil];
+        
+        NSString *translatedText = dict[@"result"][@"texts"][0][@"text"];
+        translatedText = [translatedText.trim removeExtraLineBreaks];
+        NSArray *translatedTextArray = [translatedText toParagraphs];
+
+        self.result.translatedResults = translatedTextArray;
+        self.result.raw = response;
+        completion(self.result, nil);
+        
+    }];
+    
+    [task resume];
+    
+    [self.queryModel setStopBlock:^{
+        [task cancel];
+    } serviceType:self.serviceType];
+}
+
 - (void)deepLTranslate:(NSString *)text from:(EZLanguage)from to:(EZLanguage)to completion:(void (^)(EZQueryResult *_Nullable, NSError *_Nullable))completion{
     // Docs: https://www.deepl.com/zh/docs-api/translating-text
     
@@ -333,8 +399,8 @@ static NSString *kDeepLTranslateURL = @"https://www.deepl.com/translator";
     NSString *host = isFreeKey ? @"https://api-free.deepl.com": @"https://api.deepl.com";
     NSString *url = [NSString stringWithFormat:@"%@/v2/translate", host];
     
+    
     NSDictionary *params = @{
-        @"auth_key" : self.authKey,
         @"text" : text,
         @"source_lang" : souceLangCode,
         @"target_lang" : targetLangCode
